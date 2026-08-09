@@ -1,1 +1,3 @@
 texteller
+Flask
+gunicorn

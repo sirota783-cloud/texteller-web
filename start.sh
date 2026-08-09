@@ -1,4 +1,3 @@
 #!/usr/bin/env bash
 set -e
-PORT="${PORT:-10000}"
-RAY_memory_monitor_refresh_ms=0 exec texteller launch -p "$PORT" --use-onnx --ngpu-per-replica 0
+exec gunicorn --bind "0.0.0.0:${PORT:-10000}" --workers 1 --threads 1 --timeout 180 app:app
