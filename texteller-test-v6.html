@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TexTeller — тест v6</title>
+<style>
+body{font-family:Arial,sans-serif;max-width:820px;margin:32px auto;padding:0 18px;line-height:1.45}
+.note{background:#f5f5f5;padding:12px 14px;border-radius:10px;margin:12px 0 20px}
+button,input{font-size:16px}
+button{padding:9px 14px;cursor:pointer}
+#preview{max-width:100%;max-height:360px;display:none;margin:18px 0;border:1px solid #ddd}
+#status{margin:14px 0;font-weight:600}
+pre{white-space:pre-wrap;word-break:break-word;background:#f5f5f5;padding:14px;border-radius:10px;min-height:40px}
+</style>
+</head>
+<body>
+<h1>TexTeller — тест v6</h1>
+<div class="note">Модель работает прямо в браузере. При первом запуске браузер скачает облегчённую ONNX-модель; это может занять некоторое время.</div>
+<input id="file" type="file" accept="image/*">
+<br><br>
+<button id="run" disabled>Распознать формулу</button>
+<img id="preview" alt="Предпросмотр">
+<div id="status">Загрузка страницы…</div>
+<h3>LaTeX</h3>
+<pre id="result"></pre>
+
+<script type="module">
+import { pipeline, RawImage } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.3';
+
+const fileInput = document.getElementById('file');
+const runButton = document.getElementById('run');
+const status = document.getElementById('status');
+const result = document.getElementById('result');
+const preview = document.getElementById('preview');
+
+let selectedFile = null;
+let recognizerPromise = null;
+
+async function getRecognizer() {
+  if (!recognizerPromise) {
+    status.textContent = 'Первый запуск: загружается облегчённая модель TexTeller…';
+    recognizerPromise = pipeline('image-to-text', 'onnx-community/TexTeller3-ONNX', {
+      device: 'wasm'
+    });
+  }
+  return recognizerPromise;
+}
+
+fileInput.addEventListener('change', () => {
+  selectedFile = fileInput.files?.[0] || null;
+  runButton.disabled = !selectedFile;
+  result.textContent = '';
+  if (selectedFile) {
+    preview.src = URL.createObjectURL(selectedFile);
+    preview.style.display = 'block';
+    status.textContent = 'Изображение выбрано. Нажмите «Распознать формулу».';
+  }
+});
+
+runButton.addEventListener('click', async () => {
+  if (!selectedFile) return;
+  runButton.disabled = true;
+  result.textContent = '';
+  try {
+    const recognizer = await getRecognizer();
+    status.textContent = 'Распознавание…';
+    // v6: detect handwritten rows, crop each row separately,
+    // then run the same TexTeller preprocessing/inference on every row.
+    const bitmap = await createImageBitmap(selectedFile);
+
+    const fullCanvas = document.createElement('canvas');
+    fullCanvas.width = bitmap.width;
+    fullCanvas.height = bitmap.height;
+    const fullCtx = fullCanvas.getContext('2d', { willReadFrequently: true });
+    fullCtx.drawImage(bitmap, 0, 0);
+    bitmap.close();
+
+    const fullData = fullCtx.getImageData(0, 0, fullCanvas.width, fullCanvas.height);
+    const pixels = fullData.data;
+    const W = fullCanvas.width;
+    const H = fullCanvas.height;
+
+    function pixelAt(x, y) {
+      const i = (y * W + x) * 4;
+      return [pixels[i], pixels[i + 1], pixels[i + 2]];
+    }
+
+    const corners = [
+      pixelAt(0, 0),
+      pixelAt(W - 1, 0),
+      pixelAt(0, H - 1),
+      pixelAt(W - 1, H - 1),
+    ];
+
+    const counts = new Map();
+    for (const c of corners) {
+      const key = c.join(',');
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    let bg = corners[0];
+    let best = -1;
+    for (const [key, count] of counts.entries()) {
+      if (count > best) {
+        best = count;
+        bg = key.split(',').map(Number);
+      }
+    }
+
+    // Build a horizontal ink profile.
+    const threshold = 15;
+    const rowInk = new Array(H).fill(0);
+
+    for (let y = 0; y < H; y++) {
+      let ink = 0;
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4;
+        const dr = Math.abs(pixels[i] - bg[0]);
+        const dg = Math.abs(pixels[i + 1] - bg[1]);
+        const db = Math.abs(pixels[i + 2] - bg[2]);
+        const diffGray = 0.299 * dr + 0.587 * dg + 0.114 * db;
+        if (diffGray > threshold) ink++;
+      }
+      rowInk[y] = ink;
+    }
+
+    // Consider a row "active" only if it has enough non-background pixels.
+    const minInkPerRow = Math.max(3, Math.floor(W * 0.01));
+    const active = rowInk.map(v => v >= minInkPerRow);
+
+    // Close short gaps between strokes inside the same handwritten row.
+    const maxGap = Math.max(2, Math.floor(H * 0.03));
+    for (let y = 0; y < H; ) {
+      if (active[y]) { y++; continue; }
+      let a = y;
+      while (y < H && !active[y]) y++;
+      const b = y - 1;
+      const gapLen = b - a + 1;
+      const hasActiveBefore = a > 0 && active[a - 1];
+      const hasActiveAfter = y < H && active[y];
+      if (hasActiveBefore && hasActiveAfter && gapLen <= maxGap) {
+        for (let k = a; k <= b; k++) active[k] = true;
+      }
+    }
+
+    // Extract row bands.
+    let bands = [];
+    let y = 0;
+    while (y < H) {
+      while (y < H && !active[y]) y++;
+      if (y >= H) break;
+      const y0 = y;
+      while (y < H && active[y]) y++;
+      const y1 = y - 1;
+      if (y1 - y0 + 1 >= 4) bands.push([y0, y1]);
+    }
+
+    // Fallback to whole image if segmentation found nothing.
+    if (!bands.length) bands = [[0, H - 1]];
+
+    // Merge very close bands if needed.
+    const merged = [];
+    const mergeGap = Math.max(3, Math.floor(H * 0.04));
+    for (const band of bands) {
+      if (!merged.length) {
+        merged.push(band.slice());
+      } else {
+        const prev = merged[merged.length - 1];
+        if (band[0] - prev[1] - 1 <= mergeGap) {
+          prev[1] = band[1];
+        } else {
+          merged.push(band.slice());
+        }
+      }
+    }
+    bands = merged;
+
+    async function recognizeBand(y0, y1, bandIndex) {
+      const vPad = Math.max(4, Math.floor((y1 - y0 + 1) * 0.25));
+      y0 = Math.max(0, y0 - vPad);
+      y1 = Math.min(H - 1, y1 + vPad);
+
+      // Find horizontal content bounds for this row.
+      let minX = W, maxX = -1;
+      for (let yy = y0; yy <= y1; yy++) {
+        for (let x = 0; x < W; x++) {
+          const i = (yy * W + x) * 4;
+          const dr = Math.abs(pixels[i] - bg[0]);
+          const dg = Math.abs(pixels[i + 1] - bg[1]);
+          const db = Math.abs(pixels[i + 2] - bg[2]);
+          const diffGray = 0.299 * dr + 0.587 * dg + 0.114 * db;
+          if (diffGray > threshold) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+          }
+        }
+      }
+
+      if (maxX < minX) {
+        minX = 0;
+        maxX = W - 1;
+      }
+
+      const hPad = Math.max(8, Math.floor((maxX - minX + 1) * 0.03));
+      minX = Math.max(0, minX - hPad);
+      maxX = Math.min(W - 1, maxX + hPad);
+
+      const cropW = maxX - minX + 1;
+      const cropH = y1 - y0 + 1;
+
+      const shortSide = Math.min(cropW, cropH);
+      const longSide = Math.max(cropW, cropH);
+      let newShort = 447;
+      let newLong = Math.round(447 * longSide / shortSide);
+
+      if (newLong > 448) {
+        newLong = 448;
+        newShort = Math.round(448 * shortSide / longSide);
+      }
+
+      let outW, outH;
+      if (cropW <= cropH) {
+        outW = newShort;
+        outH = newLong;
+      } else {
+        outW = newLong;
+        outH = newShort;
+      }
+
+      const finalCanvas = document.createElement('canvas');
+      finalCanvas.width = 448;
+      finalCanvas.height = 448;
+      const finalCtx = finalCanvas.getContext('2d', { alpha: false });
+      finalCtx.fillStyle = 'rgb(243,243,243)';
+      finalCtx.fillRect(0, 0, 448, 448);
+      finalCtx.imageSmoothingEnabled = true;
+      finalCtx.imageSmoothingQuality = 'high';
+      finalCtx.drawImage(
+        fullCanvas,
+        minX, y0, cropW, cropH,
+        0, 0, outW, outH
+      );
+
+      const processedBlob = await new Promise((resolve, reject) => {
+        finalCanvas.toBlob(
+          b => b ? resolve(b) : reject(new Error('Could not create processed row image')),
+          'image/png'
+        );
+      });
+
+      const image = await RawImage.fromBlob(processedBlob);
+      image.grayscale();
+
+      const output = await recognizer(image, {
+        max_new_tokens: 1024,
+        num_beams: 1,
+        do_sample: false
+      });
+
+      const text = Array.isArray(output) && output.length
+        ? (output[0].generated_text ?? output[0].text ?? JSON.stringify(output[0]))
+        : JSON.stringify(output);
+
+      return `Строка ${bandIndex + 1}:\n${text}`;
+    }
+
+    status.textContent = `Найдено строк: ${bands.length}. Распознавание…`;
+
+    const results = [];
+    for (let i = 0; i < bands.length; i++) {
+      const [y0, y1] = bands[i];
+      status.textContent = `Распознаётся строка ${i + 1} из ${bands.length}…`;
+      results.push(await recognizeBand(y0, y1, i));
+    }
+
+    const output = [{ generated_text: results.join('\n\n') }];
+    const text = Array.isArray(output) && output.length
+      ? (output[0].generated_text ?? output[0].text ?? JSON.stringify(output[0]))
+      : JSON.stringify(output);
+    result.textContent = text;
+    status.textContent = 'Готово.';
+  } catch (e) {
+    console.error(e);
+    status.textContent = 'Ошибка запуска/распознавания.';
+    result.textContent = String(e?.message || e);
+  } finally {
+    runButton.disabled = !selectedFile;
+  }
+});
+
+status.textContent = 'Выберите изображение формулы.';
+</script>
+</body>
+</html>
