@@ -3,9 +3,9 @@ import tempfile
 import torch
 from flask import Flask, request, render_template_string
 from texteller import load_model, load_tokenizer, img2latex
-
+from openai import OpenAI
 app = Flask(__name__)
-
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 model = load_model(use_onnx=True)
 tokenizer = load_tokenizer()
 
