@@ -1,5 +1,6 @@
 import os
 import tempfile
+import torch
 from flask import Flask, request, render_template_string
 from texteller import load_model, load_tokenizer, img2latex
 
@@ -57,7 +58,8 @@ def predict():
             tmp_path = tmp.name
             file.save(tmp_path)
 
-        latex = img2latex(model, tokenizer, [tmp_path])[0]
+        with torch.inference_mode():
+    latex = img2latex(model, tokenizer, [tmp_path])[0]
 
         if "text/html" in request.headers.get("Accept", ""):
             return render_template_string(PAGE, latex=latex)
