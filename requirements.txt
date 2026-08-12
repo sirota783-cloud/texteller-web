@@ -1,3 +1,4 @@
 texteller
 Flask
 gunicorn
+openai
