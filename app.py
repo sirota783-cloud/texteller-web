@@ -15,6 +15,12 @@ PAGE = """
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script>
+  window.MathJax = {
+    tex: { inlineMath: [['$', '$'], ['\\(', '\\)']] }
+  };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
   <title>TexTeller</title>
   <style>
     body { font-family: Arial, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 20px; }
@@ -24,12 +30,19 @@ PAGE = """
 </head>
 <body>
   <h1>TexTeller</h1>
+
   <form method="post" action="/predict" enctype="multipart/form-data">
     <input type="file" name="img" accept="image/*" required>
     <br>
     <button type="submit">Recognize formula</button>
   </form>
+
   {% if latex is not none %}
+    <h2>Formula</h2>
+    <div style="font-size: 24px; margin: 20px 0;">
+      {{ latex | safe }}
+    </div>
+
     <h2>LaTeX</h2>
     <pre>{{ latex }}</pre>
   {% endif %}
