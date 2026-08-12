@@ -59,7 +59,7 @@ def predict():
             file.save(tmp_path)
 
         with torch.inference_mode():
-    latex = img2latex(model, tokenizer, [tmp_path])[0]
+          latex = img2latex(model, tokenizer, [tmp_path])[0]
 
         if "text/html" in request.headers.get("Accept", ""):
             return render_template_string(PAGE, latex=latex)
