@@ -6,7 +6,7 @@ from texteller import load_model, load_tokenizer, img2latex
 
 app = Flask(__name__)
 
-model = load_model(use_onnx=False)
+model = load_model(use_onnx=True)
 tokenizer = load_tokenizer()
 
 PAGE = """
