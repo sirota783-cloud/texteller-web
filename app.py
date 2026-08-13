@@ -45,6 +45,10 @@ PAGE = """
 
     <h2>LaTeX</h2>
     <pre>{{ latex }}</pre>
+{% if feedback %}
+  <h2>AI check</h2>
+  <pre>{{ feedback }}</pre>
+{% endif %}
   {% endif %}
 </body>
 </html>
@@ -73,9 +77,26 @@ def predict():
 
         with torch.inference_mode():
           latex = img2latex(model, tokenizer, [tmp_path])[0]
+        response = client.responses.create(
+            model="gpt-5.6-luna",
+            input=f"""
+You are checking a student's short mathematics solution.
 
+Recognized student work:
+{latex}
+
+Evaluate whether the mathematical work is correct.
+
+Return exactly:
+Score: X/10
+Result: Correct / Partially correct / Incorrect
+Comment: short explanation
+"""
+        )
+
+        feedback = response.output_text
         if "text/html" in request.headers.get("Accept", ""):
-            return render_template_string(PAGE, latex=latex)
+           return render_template_string(PAGE, latex=latex, feedback=feedback)
 
         return str(latex)
     finally:
