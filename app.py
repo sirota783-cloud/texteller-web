@@ -82,13 +82,8 @@ PAGE = """
 
   <h1>Math Control Test</h1>
 
-  <h2>Problem</h2>
-
-  <div class="problem">
-    {{ problem_text }}
-    <br><br>
-    \\({{ problem_latex }}\\)
-  </div>
+ <h2>Problem 1</h2>
+<p>Write your solution and upload it below.</p>
 
 
   <form method="post"
